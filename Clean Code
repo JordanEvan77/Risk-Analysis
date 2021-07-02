@@ -1,0 +1,296 @@
+"""Jordan Gropper
+Final Project, Final Version"""
+
+from datetime import date, timedelta
+from itertools import product
+import pandas as pd
+import pylab as plt
+from p5_fx_option import fx_option_price
+
+class FxPosition(object):#this class has the same running code in my original
+    """Class for a spot position in a foreign currency.
+    This is also the base class for more complex foreign exchange contracts, like FxOption.
+    """
+
+    def __init__(self, quantity, foreign, domestic='USD'):
+        """
+        Construct a position in foreign exchange.
+        :param quantity: number of units of the foreign currency
+        :param foreign: 3-character ISO code for the foreign currency, e.g., 'gbp'
+        :param domestic: 3-character ISO code for the home currency, defaults to 'USD'
+        """
+        self.quantity = quantity  # units of foreign currency
+        self.foreign = foreign.upper()
+        self.domestic = domestic.upper()
+
+    def __repr__(self):
+        """Representation
+        >>> FxPosition(3202.0220, 'gbp')
+        FxPosition(3202.022, 'GBP')
+        >>> FxPosition(1_000, 'gbp', 'chf')
+        FxPosition(1000, 'GBP', 'CHF')
+        """
+        return "%s(%s, %r%s)" % (self.__class__.__name__, self.quantity, self.foreign,
+                                 ", %r" % self.domestic if self.domestic != 'USD' else '')#returns uppercase foreign
+
+    def __str__(self):
+        """As string
+        >>> print(FxPosition(3202.0220, 'gbp'))
+        3202.02 GBP
+        >>> print(FxPosition(1_000, 'gbp', 'chf'))
+        1000.00 GBP
+        """
+        return "%.2f %s" % (self.quantity, self.foreign)#returns just quantity and foreign
+
+    def quoting_convention(self):
+        """Returns the currency, either self.foreign or self.domestic, which is the currency whose
+        quantity is quotes in spot exchange rates for this currency pair.
+        >>> FxPosition(100, 'GBP').quoting_convention()
+        'USD'
+        >>> FxPosition(100, 'JPY').quoting_convention()
+        'JPY'
+        >>> FxPosition(100, 'JPY', 'EUR').quoting_convention()  # we'd need a chart to do these right...
+        'EUR'
+        """
+        if self.domestic == 'USD' and self.foreign not in ('GBP', 'EUR', 'AUD', 'NZD'):
+            return self.foreign  # prices are foreign units per domestic unit, e.g., 103.2 yen per dollar
+        else:
+            return self.domestic  # prices are domestic units per foreign unit, e.g. 1.49 dollars per pound sterling
+
+    def price(self, spot, spot_date=date.today(), volatility=0.0, domestic_rate=0.0, foreign_rate=0.0):
+        """Return the value in self.domestic units of self.quantity of self.foreign unit.
+        The spot parameter is the market-quoted exchange rate (for one unit of currency).
+        The other parameters are ignored here, though they may not be in subclasses.
+        >>> FxPosition(1000, 'GBP', 'USD').price(1.25)
+        1250.0
+        >>> FxPosition(25000, 'JPY', 'USD').price(100.0)
+        250.0
+        """
+        if self.quoting_convention() == self.domestic:
+            price1 = self.quantity * spot#pricing by domestic
+        else:
+            price1 = self.quantity * 1 / spot#pricing by foreign
+        return price1
+
+
+class FxOption(FxPosition):
+    """Models a foreign exchange option contract."""
+
+    def __init__(self, quantity, call_put, strike, expiration, foreign, domestic='USD'):
+        """
+        Constucts a forex option
+        :param quantity:    number of units of foreign currency in contract (can be negative for short position)
+        :param call_put:    refers to the foreign currency units
+        :param strike:      number of units to exchange if exercised (same units as spot rate for this currency pair)
+        :param expiration:  date on optional exchange
+        :param foreign:     ISO code for the currency units being optioned
+        :param domestic:    ISO code for the payment currency
+        """
+        super(FxOption, self).__init__(quantity, foreign, domestic)
+        self.is_call = call_put[0].lower() == 'c'#much more effective method of identifying 'c' as call
+        self.strike = strike
+        self.expiration = expiration
+
+    def __repr__(self):
+        """Representation
+        >>> FxOption(3202.0220, 'c', 1.5, date(2019, 4, 18), 'gbp')
+        FxOption(3202.022, 'call', 1.5, datetime.date(2019, 4, 18), 'GBP')
+        """
+        return "%s(%s, %r, %s, %r, %r%s)" % (self.__class__.__name__, self.quantity,
+                                             'call' if self.is_call else 'put',
+                                             self.strike, self.expiration, self.foreign,
+                                             ", %r" % self.domestic if self.domestic != 'USD' else '')
+
+    def __str__(self):
+        return repr(self)
+
+    def price(self, spot, spot_date=date.today(), volatility=0.15, domestic_rate=0.03, foreign_rate=0.03):
+        """Return the value of the contract in self.domestic units.
+        >>> option = FxOption(1_000_000, 'call', 152, date(2019, 7, 1), 'NZD')
+        >>> '%.4f' % option.price(150, date(2019, 4, 1), 0.13, 0.03, 0.04)
+        '2811044.5343'
+        >>> option = FxOption(1_000_000, 'put', 152, date(2019, 7, 1), 'NZD')
+        >>> '%.4f' % option.price(150, date(2019, 4, 1), 0.13, 0.03, 0.04)
+        '5166865.0332'
+        >>> option = FxOption(10_000, 'put', 108, date(2019, 7, 1), 'JPY')
+        >>> fx_option_price(False, 1/108, date(2019, 7, 1), date(2019, 4, 1), 1/108.38, 0.0638, 0.0231988, -0.006550)
+        0.00010009154472865982
+        >>> '%.10f' % option.price(108.38, date(2019, 4, 1), 0.0638, 0.0231988, -0.006550)
+        '1.0009154473'
+        >>> FxOption(0, 'c', 0, date.today(), 'XYZ').price(0, date.today(), 0, 0, 0)
+        0.0
+        """
+        if self.quantity == 0.0:#good qualifier to include for empty currency positions
+            return 0.0
+        if self.quoting_convention() != self.domestic:#inversion for when spot is larger than strike
+            spot = 1 / spot
+            strike = 1 / self.strike#the adjustment I was missing inititially
+        else:
+            strike = self.strike
+        
+        p = fx_option_price(self.is_call, strike, self.expiration,#very similar to what I had
+                            spot_date, spot, volatility, domestic_rate, foreign_rate)
+        p *= self.quantity
+        return p
+
+
+class Scenario(object):
+    """Class to calculate profits for a given scenario."""
+
+    def __init__(self, positions, spots, vols, rates):
+        """
+        Construct a Scenario with given:
+        :param positions:  list of objects that have a method, price, and a data attribute, foreign
+        :param spots:      dict of spot exchange rates for today versus USD (quoted in standard market conventions)
+        :param vols:       dict of volatilities for each exchange rate
+        :param rates:      dict of 3-month rates used to pass to price method for positions (must include 'USD' key)
+        """
+        self.positions = positions
+        self.spots = spots
+        self.volatilities = vols
+        self.rates = rates
+        self.spot_date = date.today()
+
+    def profit(self, moves):
+        """
+        Compute profit in USD of positions tomorrow given the specified moves.
+        Returns a dictionary of the profits broken down by currency and also with a 'Total'.
+        :param moves:      number of standard deviations to move spot by tomorrow in scenario
+
+        >>> positions = [FxPosition(100, 'GBP'), FxPosition(10_000, 'JPY')]
+        >>> spots = {'GBP': 1.5, 'JPY': 100.0}
+        >>> vols = {'GBP': 0.1, 'JPY': 0.1}
+        >>> rates = {'GBP': 0.03, 'JPY': 0.0, 'USD': 0.02}
+        >>> Scenario(positions, spots, vols, rates).profit({'GBP': 0, 'JPY': 0})
+        {'GBP': 0.0, 'JPY': 0.0, 'Total': 0.0}
+        >>> positions.append(FxOption(-100_000, 'c', 1.123, date.today() + timedelta(days=90), 'GBP'))
+        >>> sc = Scenario(positions, spots, vols, rates)
+        >>> sc.profit({'GBP': 0, 'JPY': 0})
+        {'GBP': -6.1150852480423055, 'JPY': 0.0, 'Total': -6.1150852480423055}
+        >>> sc.profit({'GBP': -3, 'JPY': 1})
+        {'GBP': 36911.059057459956, 'JPY': -9.090909090909108, 'Total': 36901.968148369044}
+        """
+        today = self.compute_valuation(self.spots)#passes through
+        tomorrow_spots = {c: self.spots[c] * (1 + moves[c] * self.volatilities[c]) for c in today}
+        tomorrow = self.compute_valuation(tomorrow_spots, timedelta(days=1))#passes through again
+        profit = {c: tomorrow[c] - today[c] for c in today}#selecting paramters for calc
+        profit['Total'] = sum(profit.values())
+        return profit
+
+    def compute_valuation(self, spots, spot_date_delta=timedelta(0)):
+        """Compute value in USD of positions with given spots on self.spot_date + spot_date_delta.
+        Uses vols and rates from self.
+        >>> positions = [FxPosition(100, 'GBP'), FxPosition(10_000, 'JPY')]
+        >>> tomorrow = {'GBP': 1.5, 'JPY': 100.0}
+        >>> vols = {'GBP': 0.1, 'JPY': 0.1}
+        >>> rates = {'GBP': 0.03, 'JPY': 0.0, 'USD': 0.02}
+        >>> Scenario(positions, None, vols, rates).compute_valuation(tomorrow, timedelta(days=1))
+        {'GBP': 150.0, 'JPY': 100.0}
+        """
+        spot_date = self.spot_date + spot_date_delta
+        values = {}
+        for position in self.positions:#iteration that fills dictionary
+            c = position.foreign
+            if c not in values:
+                values[c] = 0.0
+            values[c] += position.price(spots[c], spot_date, self.volatilities[c], self.rates['USD'], self.rates[c])
+        #above calculates the actual value of each position
+        return values
+
+
+def load_data(filename):
+    """Get the data from the given csv file.
+    Returns: positions, spots, volatilities, rates
+    """
+    ccy_data = pd.read_csv(filename)
+    currencies = ccy_data['currency']
+    spots = dict(zip(currencies, ccy_data['spot exchange rate']))
+    volatilities = dict(zip(currencies, ccy_data['3-month volatility (annualized)']))
+    rates = dict(zip(currencies, ccy_data['3-month interest rate (annualized)']))
+
+    # start positions with the spot fx ones
+    currencies = [c for c in currencies if c != 'USD']
+    positions = []
+    for i in range(len(ccy_data['currency'])):
+        currency = ccy_data['currency'][i]
+        if currency != 'USD':
+            quantity = ccy_data['spot position'][i]
+            next_object = FxPosition(quantity, currency)
+            positions.append(next_object)
+    #pulling attributes from columns
+    three_months = date.today() + timedelta(days=90)
+    for i in range(1, len(currencies) + 1):#iteration through non USD currency
+        c = currencies[i - 1]
+        call_quantity, put_quantity = ccy_data['call option position'][i], ccy_data['put option position'][i]
+        if call_quantity != 0:
+            positions.append(FxOption(call_quantity, 'call', spots[c], three_months, c))
+        if put_quantity != 0:
+            positions.append(FxOption(put_quantity, 'put', spots[c], three_months, c))
+    #print(positions) spots, volatilities,rates)
+    print('positions')
+    print(positions)
+    print('spots')
+    print(spots)
+    print('volatilities')
+    print(volatilities)
+    print('rates')
+    print(rates)
+    return positions, spots, volatilities, rates
+
+
+def extremeness(moves):
+    """Get the 'severity' of the moves--sum of absolute values of moves.
+    >>> extremeness((3, -2, 0, 1))
+    6
+    """
+    return sum([abs(move) for move in moves])#very simple version of iterating and adding absolute
+
+
+def plot_scenario(profits, moves):
+    """Plot a mixed-color bar chart as specified by management in PF: Data Translator Final Project."""
+    plt.figure(1)
+    bfactor = 1e9
+    mfactor = 1e6
+    width = 0.35
+    index = range(len(profits) - 1)
+    losses = {profits[c]: c for c in profits if c != 'Total'}
+    numbers = [loss for loss in sorted(losses)]
+    currencies = [losses[loss] for loss in sorted(losses)]
+    for i, number in enumerate(numbers):
+        plt.bar([i], [number], width)
+    plt.xticks(index, currencies)
+    plt.title('Worst overnight scenario: loss of $%.2f bln' % (-profits['Total'] / bfactor))
+    plt.ylabel('Profit USD')
+    plt.xlabel('Currency')
+    legend = ['Loss of $%.2fmm due to %s std dev move in %s' % (-profits[c] / mfactor, moves[c], c) for c in currencies]
+    plt.legend(legend)
+   # pylab.savefig('/Users/klundeen/OneDrive - Seattle University/SeattleU/OMSBA5061/Images/pf_image.png')
+    plt.show()
+
+
+def produce_report(data_set_name):
+    """Load the data from the currency_data file, calculate all the scenarios (3125 of them if there
+    are five non-USD currencies), pick the worst of these (biggest loss) and plot it.
+    """
+    positions, spots, volatilities, rates = load_data('pf_%s_currency_data.csv' % data_set_name)
+    scenario = Scenario(positions, spots, volatilities, rates)
+    move_choices = (-3, -1, 0, 1, 3)
+    currencies = [c for c in spots if c != 'USD']
+    results = []
+    n = 0
+    for moves in product(move_choices, repeat=len(currencies)):#loop mechanism for 5 move variety
+        ccy_moves = {currencies[i]: moves[i] for i in range(len(moves))}
+        r = scenario.profit(ccy_moves)
+        results.append((r['Total'], extremeness(moves), n, ccy_moves, r))
+        n += 1
+    results.sort()
+    for result in results[:10]:
+        print(result[:4])
+    worst = results[0]
+    plot_scenario(worst[4], worst[3])#hands of to plotting function.
+
+
+if __name__ == '__main__':
+    produce_report('test1')  # this should produce results as shown in Canvas
+    #produce_report('test2')  # verify that this produces the correct results
+    #produce_report('test3')  # used by grader
