@@ -1,0 +1,7 @@
+currency,spot exchange rate,3-month volatility (annualized),3-month interest rate (annualized),spot position,call option position,put option position
+USD,1,0,0.023144,0,0,0
+EUR,1.12786,0.1021,-0.00351,297234882,23923,2389288
+GBP,1.2897,0.073,0.03149,56610000,0,782382929
+JPY,107.86,0.0671,-0.006124,9231313100,0,0
+CHF,0.9912,0.0444,-0.007382,1009100,-999108890,0
+AUD,0.7003,0.1033,0.01,28928888800,-81298288,1110100200
